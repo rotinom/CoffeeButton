@@ -10,6 +10,7 @@
 // #include <Adafruit_NeoPixel.h>
 
 #include "time.h"
+#include "LED.h"
 
 
 #define NTP_SERVER "pool.ntp.org"
@@ -161,9 +162,12 @@ unsigned long getTime() {
   return now;
 }
 
-AcksenButton grnButton = AcksenButton(GRN_BUTTON, ACKSEN_BUTTON_MODE_NORMAL, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
-AcksenButton redButton = AcksenButton(RED_BUTTON, ACKSEN_BUTTON_MODE_NORMAL, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
+AcksenButton grnButton(GRN_BUTTON, ACKSEN_BUTTON_MODE_NORMAL, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
+AcksenButton redButton(RED_BUTTON, ACKSEN_BUTTON_MODE_NORMAL, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
 
+LED onboardLed(LED_BUILTIN);
+LED grnLed(GRN_LED);
+LED redLed(RED_LED);
 
 void setup() {
     Serial.begin(115200);
@@ -171,9 +175,6 @@ void setup() {
 
 
     pinMode(LED_BUILTIN, OUTPUT);
-    pinMode(RED_LED, OUTPUT);
-    pinMode(GRN_LED, OUTPUT);
-
     digitalWrite(LED_BUILTIN, LOW); 
 
 
@@ -217,30 +218,11 @@ void setup() {
 }
 
 void setGrnLight(uint8_t state){
-      digitalWrite(GRN_LED, state); 
-
-    // if(state == LOW) {
-    //     Serial.println("Green cleared...");
-    //     pixels.clear();
-    // }
-    // else {
-    //     Serial.println("Green showed...");
-    //     pixels.setPixelColor(0, pixels.Color(0, 150, 0));        
-    // }
-    // pixels.show();
+    grnLed.setState(state);
 }
 
 void setRedLight(uint8_t state){
-    digitalWrite(RED_LED, state); 
-    // if(state == LOW) {
-    //     Serial.println("Red cleared...");
-    //     pixels.clear();
-    // }
-    // else {
-    //     Serial.println("Red showed...");
-    //     pixels.setPixelColor(0, pixels.Color(150, 0, 0));
-    // }
-    // pixels.show();
+    redLed.setState(state);
 }
 
 bool grnLongPress = false;
