@@ -6,9 +6,7 @@
 
 #include <MQTTClient.h>
 #include <ArduinoJson.h>
-#include <AcksenButton.h>
-// #include <Adafruit_NeoPixel.h>
-// #include "TickTwo.h"
+#include "TickTwo.h"
 
 #include "time.h"
 #include "LED.h"
@@ -30,24 +28,25 @@
 #define RED_LED 26
 #define GRN_LED 18
 
-#define strBufSize 256
-char strBuf[strBufSize];
+#define LED_HEARTBEAT_MILLIS 30000
+
+char strBuf[256];
 
 // Manage our wifi with a captive portal
 WiFiManager wifiManager;
-MQTTClient client(256);
+MQTTClient mqttClient(256);
 WiFiClientSecure net = WiFiClientSecure();
 
-// AcksenButton grnButton(GRN_BUTTON, ACKSEN_BUTTON_MODE_NORMAL|ACKSEN_BUTTON_MODE_LONGPRESS, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
-AcksenButton redButton(RED_BUTTON, ACKSEN_BUTTON_MODE_NORMAL|ACKSEN_BUTTON_MODE_LONGPRESS, 100, INPUT_PULLUP);
-
-LED onboardLed(LED_BUILTIN);
-LED grnLed(GRN_LED);
-LED redLed(RED_LED);
+LED onboardLed(LED_BUILTIN, LED::StateEnum::ON);
+LED grnLed(GRN_LED, LED::StateEnum::ON);
+LED redLed(RED_LED, LED::StateEnum::ON);
 
 SmartButton* smartGrnButton;
+SmartButton* smartRedButton;
 
-
+#define TICKTWO_FOREVER 0
+TickTwo* aliveTimerOn;
+TickTwo* aliveTimerOff;
 
 
 void configModeCallback(WiFiManager *myWiFiManager) {
@@ -67,27 +66,27 @@ void saveConfigCallback() {
   shouldSaveConfig = true;
 }
 
-// void setWlanLED(bool state){
-//   digitalWrite(LED_BUILTIN, state);
-// }
 
-// void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info){
-//   Serial.println("Connected to AP successfully!");
-//   setWlanLED(true);
-// }
-
-// void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info){
-//   Serial.println("Connected to AP successfully!");
-//   setWlanLED(false);
-// }
 
 void connectWifi(){
+    onboardLed.off();
+
+    // Setup the captive portal for wifi setup
+    Serial.println("Setting up wifiManager callbacks");
+    
+    wifiManager.setAPCallback(configModeCallback);
+    wifiManager.setSaveConfigCallback(saveConfigCallback);
+    wifiManager.setConfigPortalTimeout(180);
+    wifiManager.autoConnect("CoffeeButtonWifi", PORTAL_PASSWORD);
+    
     Serial.print("Connecting to Wi-Fi.");
     while (WiFi.status() != WL_CONNECTED){
       delay(500);
       Serial.print(".");
     }
     Serial.println("  Connected!");
+
+    onboardLed.on();
 }
 
 void setupMQTT(){
@@ -97,25 +96,20 @@ void setupMQTT(){
     net.setPrivateKey(AWS_CERT_PRIVATE);
 
     // Connect to the MQTT broker on the AWS endpoint we defined earlier
-    snprintf(strBuf, strBufSize, "Beginning connection to MQTT broker at %s", AWS_IOT_ENDPOINT);
+    snprintf(strBuf, sizeof(strBuf), "Beginning connection to MQTT broker at %s", AWS_IOT_ENDPOINT);
     Serial.println(strBuf);
-    client.begin(AWS_IOT_ENDPOINT, 8883, net);
+    mqttClient.begin(AWS_IOT_ENDPOINT, 8883, net);
 
-    snprintf(strBuf, strBufSize, "Connecting to AWS as %s.", THINGNAME);
+    mqttClient.setTimeout(500);
+
+    snprintf(strBuf, sizeof(strBuf), "Connecting to AWS as %s.", THINGNAME);
     Serial.print(strBuf);
-    while (!client.connect(THINGNAME)) {
-      Serial.print(".");
+    while (!mqttClient.connect(THINGNAME)) {
+        Serial.print(".");
     }
-
-    // TODO: Look at timeouts
-    // if(!client.connected()){
-    //   Serial.println("Timed out!");
-    //   return;
-    // }
-    // else {
-      Serial.println("  Connected!");
-    // }
+    Serial.println("  Connected!");
 }
+
 
 char jsonBuffer[512];
 void publishMessage(const char* topic, const bool& status) {
@@ -126,23 +120,23 @@ void publishMessage(const char* topic, const bool& status) {
     serializeJson(doc, jsonBuffer); // serialize to the buffer
 
     int count = 0;
-    snprintf(strBuf, strBufSize, "Attempting to publish to topic %s -> %s", topic, jsonBuffer);
+    snprintf(strBuf, sizeof(strBuf), "Attempting to publish to topic %s -> %s", topic, jsonBuffer);
     Serial.println(strBuf);
 
-    while(!client.publish(topic, jsonBuffer)) {
+    while(!mqttClient.publish(topic, jsonBuffer)) {
         if(count > 5){
             Serial.println("Timed out trying to publish to MQTT");
             break;
         }
 
-        snprintf(strBuf, strBufSize, "Last error: %d", client.lastError());
+        snprintf(strBuf, sizeof(strBuf), "Last error: %d", mqttClient.lastError());
         Serial.println(strBuf);
         count++;
         delay(1000);
         Serial.println("Trying to send again...");
     }
     if(count <= 5) { 
-        snprintf(strBuf, strBufSize, "Successfully published %s", jsonBuffer);
+        snprintf(strBuf, sizeof(strBuf), "Successfully published %s", jsonBuffer);
         Serial.println(strBuf);
     }
 }
@@ -160,42 +154,28 @@ unsigned long getTime() {
 }
 
 
-
 void setup() {
     Serial.begin(115200);
-    Serial.println("Setting up initial LED state");
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW); 
+    onboardLed.on();
 
     smartGrnButton = new SmartButton(GRN_BUTTON, INPUT_PULLUP, 50);
     smartGrnButton->setInverted(true);
     smartGrnButton->setPressedCallback(grnButtonClicked);
     smartGrnButton->setReleasedCallback(grnButtonReleased);
+    smartGrnButton->setLongPressCallback(grnButtonLongPress);
 
-    // grnButton.setLongPressInterval(1000);
-    redButton.setLongPressInterval(1000);
+    smartRedButton = new SmartButton(RED_BUTTON, INPUT_PULLUP, 50);
+    smartRedButton->setInverted(true);
+    smartRedButton->setPressedCallback(redButtonClicked);
+    smartRedButton->setReleasedCallback(redButtonReleased);
+    smartRedButton->setLongPressCallback(redButtonLongPress);
 
+    // Declare and start our alive timer
+    aliveTimerOn  = new TickTwo(aliveHandlerOn, LED_HEARTBEAT_MILLIS, TICKTWO_FOREVER, MILLIS);
+    aliveTimerOn->start();
 
-    // pinMode(RED_BUTTON, INPUT_PULLUP);
-    // pinMode(GRN_BUTTON, INPUT_PULLUP);
-
-    // Hook up callbacks for wifi status
-    // Serial.println("Hooking up Wifi callbacks");
-    // Serial.flush();
-    // WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
-    // WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-
-    // // Start our tickers
-    // Serial.println("Starting tickers");
-    // ledTicker.start(); //start the ticker.
-
-    // Setup the captive portal for wifi setup
-    Serial.println("Setting up wifiManager callbacks");
-    
-    wifiManager.setAPCallback(configModeCallback);
-    wifiManager.setSaveConfigCallback(saveConfigCallback);
-    wifiManager.setConfigPortalTimeout(180);
-    wifiManager.autoConnect("CoffeeButtonWifi", PORTAL_PASSWORD);
+    // Don't start the off timer
+    aliveTimerOff = new TickTwo(aliveHandlerOff,  250, 1, MILLIS);
 
     // Setup wifi
     connectWifi();
@@ -206,90 +186,85 @@ void setup() {
     Serial.println(getTime());
 
     // Setup MQTT
-    setupMQTT();
-
-    
+    setupMQTT();    
 }
 
-void setGrnLight(uint8_t state){
-    grnLed.setState(state);
-}
+bool startedUp = false;
 
-void setRedLight(uint8_t state){
-    redLed.setState(state);
+void grnButtonLongPress() {
+    Serial.printf("%u - %s:%d Green long-press\n", millis(), __FILE__, __LINE__);
 }
 
 void grnButtonClicked(){
-    grnLed.setState(state);
+    if(!startedUp) return;
+    grnLed.setState(LED::StateEnum::ON);
     publishMessage(COFFEE_TOPIC, true);
 }
 
 void grnButtonReleased() {
-    setGrnLight(LOW);
+    if(!startedUp) return;
+    grnLed.setState(LED::StateEnum::OFF);
+}
+
+void redButtonLongPress() {
+    Serial.printf("%u - %s:%d Red long-press\n", millis(), __FILE__, __LINE__);
 }
 
 void redButtonClicked(){
-    grnLed.setState(state);
-    publishMessage(COFFEE_TOPIC, true);
+    if(!startedUp) return;
+    redLed.setState(LED::StateEnum::ON);
+    publishMessage(COFFEE_TOPIC, false);
 }
 
 void redButtonReleased() {
-    setGrnLight(LOW);
+    if(!startedUp) return;
+    redLed.setState(LED::StateEnum::OFF);
 }
 
-bool grnLongPress = false;
-bool redLongPress = false;
+void aliveHandlerOn() {
+    grnLed.write(100);
+    redLed.write(100);
+    aliveTimerOff->start();    
+}
 
+void aliveHandlerOff() {
+    grnLed.off();
+    redLed.off();
+}
+
+void tickTimers(){
+    aliveTimerOn->update();
+    aliveTimerOff->update();
+}
+
+
+int mainLoopFirstInvokedMillis = 0;
 void loop() {
+    uint32_t loopStartTime = millis();
+
+    tickTimers();
+
+    // Track when the main loop was first invoked
+    if(!mainLoopFirstInvokedMillis) {
+        mainLoopFirstInvokedMillis = loopStartTime;
+    }
+
+    // If we are X ms beyond first start (to let things settle)
+    else if(loopStartTime > (mainLoopFirstInvokedMillis + 100)) {
+        startedUp = true;
+    }
+
     // To keep the MQTT connection alive
-    client.loop();
+    if(!mqttClient.loop()){
+        Serial.printf("MQTT loop failed with error %d\n", mqttClient.lastError());
+
+        if(!mqttClient.connected()){
+            Serial.println("Attempting to reconnect...");
+            setupMQTT();
+        }
+    }
 
     // Update the button
     smartGrnButton->tick();
-
-    // grnButton.refreshStatus();
-    // if(grnButton.onReleased()) {
-    //     snprintf(strBuf, strBufSize, "%d I CAN HAS COFFEE! 😸", millis());
-    //     Serial.println(strBuf);
-    //     Serial.println("pressed...");
-
-    //     setGrnLight(HIGH);
-    //     publishMessage(COFFEE_TOPIC, true);
-    // }
-    // else if(grnButton.onPressed()){
-    //     setGrnLight(LOW);
-    //     Serial.println("released...");
-    // }
-
-    redButton.refreshStatus();
-    if(redButton.onReleased()) {
-        snprintf(strBuf, strBufSize, "%d I NO CAN HAS COFFEE! :(", millis());
-        Serial.println(strBuf);
-        Serial.println("pressed...");
-
-        setRedLight(HIGH);
-        publishMessage(COFFEE_TOPIC, false);
-    }
-    else if(redButton.onPressed()){
-        setRedLight(LOW);
-        Serial.println("released...");
-    }
-
-    // if(grnButton.onLongPress()){
-    //   Serial.println("Green long-pressed");
-    //   grnLongPress = true;
-    // }
-    // if(grnButton.onReleased()){
-    //   grnLongPress = false;
-    // }
-
-
-    if(redButton.onLongPress()){
-      Serial.println("Red long-pressed");
-      redLongPress = true;
-    }
-    if(redButton.onReleased()){
-      redLongPress = false;
-    }
-
+    smartRedButton->tick();
 }

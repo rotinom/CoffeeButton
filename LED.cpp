@@ -1,37 +1,42 @@
 #include "LED.h"
 #include <Arduino.h>
+#include <limits>
 
 class LED::impl {
-
     public:
-        impl(uint8_t pin):
-            pin(pin)
+        impl(uint8_t pin, LED::StateEnum initialState):
+            _pin(pin)
         {
-            pinMode(pin, OUTPUT);
+            pinMode(_pin, OUTPUT);
+            digitalWrite(_pin, initialState);
         }
 
         ~impl(){}
 
         void off(){
-            digitalWrite(pin, LOW);
+            write(std::numeric_limits<uint8_t>::min());
         }
 
         void on(){
-            digitalWrite(pin, HIGH);
+            write(std::numeric_limits<uint8_t>::max());
         }
 
-        void setState(uint8_t state){
-            digitalWrite(pin, state);
+        void setState(LED::StateEnum state){
+            write(state);
         }
 
+        void write(uint8_t value) {
+            // Serial.printf("Setting LED - pin %u; value: %u\n", _pin, value);
+            analogWrite(_pin, value);
+        }
 
     private:
-        uint8_t pin;
+        uint8_t _pin;
 };
 
 // pimpl constructor
-LED::LED(uint8_t pin):
-    p_impl(new impl(pin))
+LED::LED(uint8_t pin, LED::StateEnum initialState):
+    p_impl(new impl(pin, initialState))
 {}
 
 // Destructor has to be here for dumb reasons.  See:
@@ -41,4 +46,5 @@ LED::~LED(){}
 // pimpl invokers
 void LED::off() {p_impl -> off();}
 void LED::on() {p_impl -> on();}
-void LED::setState(uint8_t state) {p_impl -> setState(state);}
+void LED::setState(LED::StateEnum state) {p_impl -> setState(state);}
+void LED::write(uint8_t value) {p_impl -> write(value);}

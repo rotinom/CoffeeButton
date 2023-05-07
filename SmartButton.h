@@ -4,7 +4,7 @@
 class SmartButton {
 
     public:
-        SmartButton(uint8_t pin, uint8_t inputMode, uint32_t debounceMillis = 100);
+        SmartButton(uint8_t pin, uint8_t inputMode, bool inverted = true, uint32_t debounceMillis = 100);
         ~SmartButton();
 
         void tick();
