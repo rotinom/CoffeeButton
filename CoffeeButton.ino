@@ -8,9 +8,11 @@
 #include <ArduinoJson.h>
 #include <AcksenButton.h>
 // #include <Adafruit_NeoPixel.h>
+// #include "TickTwo.h"
 
 #include "time.h"
 #include "LED.h"
+#include "SmartButton.h"
 
 
 #define NTP_SERVER "pool.ntp.org"
@@ -28,21 +30,22 @@
 #define RED_LED 26
 #define GRN_LED 18
 
-#define BUTTON_DEBOUNCE_INTERVAL 100
-
 #define strBufSize 256
 char strBuf[strBufSize];
 
 // Manage our wifi with a captive portal
 WiFiManager wifiManager;
-MQTTClient client = MQTTClient(256);
+MQTTClient client(256);
 WiFiClientSecure net = WiFiClientSecure();
 
-// Adafruit_NeoPixel pixels(1, NEO_LED, NEO_GRB + NEO_KHZ800);
+// AcksenButton grnButton(GRN_BUTTON, ACKSEN_BUTTON_MODE_NORMAL|ACKSEN_BUTTON_MODE_LONGPRESS, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
+AcksenButton redButton(RED_BUTTON, ACKSEN_BUTTON_MODE_NORMAL|ACKSEN_BUTTON_MODE_LONGPRESS, 100, INPUT_PULLUP);
 
+LED onboardLed(LED_BUILTIN);
+LED grnLed(GRN_LED);
+LED redLed(RED_LED);
 
-
-
+SmartButton* smartGrnButton;
 
 
 
@@ -79,16 +82,12 @@ void saveConfigCallback() {
 // }
 
 void connectWifi(){
-    Serial.println("Connecting to Wi-Fi");
-    Serial.flush();
-
+    Serial.print("Connecting to Wi-Fi.");
     while (WiFi.status() != WL_CONNECTED){
       delay(500);
       Serial.print(".");
-      Serial.flush();
     }
-    Serial.println("Connected!!!");
-    Serial.flush();
+    Serial.println("  Connected!");
 }
 
 void setupMQTT(){
@@ -102,22 +101,20 @@ void setupMQTT(){
     Serial.println(strBuf);
     client.begin(AWS_IOT_ENDPOINT, 8883, net);
 
-    snprintf(strBuf, strBufSize, "Connecting to AWS as %s", THINGNAME);
-    Serial.println(strBuf);
+    snprintf(strBuf, strBufSize, "Connecting to AWS as %s.", THINGNAME);
+    Serial.print(strBuf);
     while (!client.connect(THINGNAME)) {
-      Serial.print(client.lastError());
       Serial.print(".");
-      Serial.flush();
     }
 
-    if(!client.connected()){
-      Serial.println("AWS IoT Timeout!");
-      return;
-    }
-    else {
-      Serial.println("Connected!");
-    }
-    Serial.flush();
+    // TODO: Look at timeouts
+    // if(!client.connected()){
+    //   Serial.println("Timed out!");
+    //   return;
+    // }
+    // else {
+      Serial.println("  Connected!");
+    // }
 }
 
 char jsonBuffer[512];
@@ -162,24 +159,21 @@ unsigned long getTime() {
   return now;
 }
 
-AcksenButton grnButton(GRN_BUTTON, ACKSEN_BUTTON_MODE_NORMAL, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
-AcksenButton redButton(RED_BUTTON, ACKSEN_BUTTON_MODE_NORMAL, BUTTON_DEBOUNCE_INTERVAL, INPUT_PULLUP);
 
-LED onboardLed(LED_BUILTIN);
-LED grnLed(GRN_LED);
-LED redLed(RED_LED);
 
 void setup() {
     Serial.begin(115200);
     Serial.println("Setting up initial LED state");
-
-
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW); 
 
+    smartGrnButton = new SmartButton(GRN_BUTTON, INPUT_PULLUP, 50);
+    smartGrnButton->setInverted(true);
+    smartGrnButton->setPressedCallback(grnButtonClicked);
+    smartGrnButton->setReleasedCallback(grnButtonReleased);
 
-    grnButton.setLongPressInterval(10000);
-    redButton.setLongPressInterval(10000);
+    // grnButton.setLongPressInterval(1000);
+    redButton.setLongPressInterval(1000);
 
 
     // pinMode(RED_BUTTON, INPUT_PULLUP);
@@ -225,6 +219,24 @@ void setRedLight(uint8_t state){
     redLed.setState(state);
 }
 
+void grnButtonClicked(){
+    grnLed.setState(state);
+    publishMessage(COFFEE_TOPIC, true);
+}
+
+void grnButtonReleased() {
+    setGrnLight(LOW);
+}
+
+void redButtonClicked(){
+    grnLed.setState(state);
+    publishMessage(COFFEE_TOPIC, true);
+}
+
+void redButtonReleased() {
+    setGrnLight(LOW);
+}
+
 bool grnLongPress = false;
 bool redLongPress = false;
 
@@ -232,19 +244,22 @@ void loop() {
     // To keep the MQTT connection alive
     client.loop();
 
-    grnButton.refreshStatus();
-    if(grnButton.onReleased()) {
-        snprintf(strBuf, strBufSize, "%d I CAN HAS COFFEE! 😸", millis());
-        Serial.println(strBuf);
-        Serial.println("pressed...");
+    // Update the button
+    smartGrnButton->tick();
 
-        setGrnLight(HIGH);
-        publishMessage(COFFEE_TOPIC, true);
-    }
-    else if(grnButton.onPressed()){
-        setGrnLight(LOW);
-        Serial.println("released...");
-    }
+    // grnButton.refreshStatus();
+    // if(grnButton.onReleased()) {
+    //     snprintf(strBuf, strBufSize, "%d I CAN HAS COFFEE! 😸", millis());
+    //     Serial.println(strBuf);
+    //     Serial.println("pressed...");
+
+    //     setGrnLight(HIGH);
+    //     publishMessage(COFFEE_TOPIC, true);
+    // }
+    // else if(grnButton.onPressed()){
+    //     setGrnLight(LOW);
+    //     Serial.println("released...");
+    // }
 
     redButton.refreshStatus();
     if(redButton.onReleased()) {
@@ -260,12 +275,21 @@ void loop() {
         Serial.println("released...");
     }
 
-    if(grnButton.onLongPress()){
-      Serial.println("Green long-pressed");
-      grnLongPress = true;
+    // if(grnButton.onLongPress()){
+    //   Serial.println("Green long-pressed");
+    //   grnLongPress = true;
+    // }
+    // if(grnButton.onReleased()){
+    //   grnLongPress = false;
+    // }
+
+
+    if(redButton.onLongPress()){
+      Serial.println("Red long-pressed");
+      redLongPress = true;
     }
-    if(grnButton.onReleased()){
-      grnLongPress = false;
+    if(redButton.onReleased()){
+      redLongPress = false;
     }
 
 }
